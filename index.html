@@ -28,22 +28,21 @@
   h2 { font-size:18px; font-weight:800; letter-spacing:-.02em; margin:28px 4px 10px; }
   .card { background:var(--card); border-radius:20px; padding:16px; }
   .muted { color:var(--muted); } .small { font-size:13px; }
-  .names { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-  .name { border:1px solid var(--border); background:var(--card); border-radius:99px; padding:8px 14px; font-weight:700; cursor:pointer; }
-  .name:active { background:var(--subtle); }
-  .hello { display:flex; align-items:center; margin:24px 4px 10px; }
-  .hello b { flex:1; font-size:18px; font-weight:800; }
   .link { background:none; border:0; color:var(--muted); font-size:13px; cursor:pointer; padding:6px; }
-  .votes { display:flex; gap:8px; }
-  .vote { flex:1; border:0; border-radius:16px; background:var(--card); padding:16px 0 14px; cursor:pointer;
-          display:flex; flex-direction:column; align-items:center; gap:4px; font-weight:800; font-size:15px; }
-  .vote .i { font-size:24px; line-height:1; }
-  .vote.on { color:#fff; }
-  .vote:disabled { opacity:.6; }
-  .counts { display:flex; }
-  .counts div { flex:1; } .counts b { display:block; font-size:20px; font-weight:800; }
-  .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:12px; }
-  .tag { background:var(--successSoft); color:var(--success); border-radius:99px; padding:3px 10px; font-size:12.5px; font-weight:700; }
+  .guide { margin:-4px 4px 10px; }
+  .slot { margin-bottom:10px; }
+  .slot .head { display:flex; align-items:center; gap:6px; }
+  .slot .head b { font-size:16px; font-weight:800; }
+  .slot .head .open { margin-left:auto; color:var(--accent); font-weight:700; font-size:14px; }
+  .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  .tag { background:var(--subtle); border-radius:99px; padding:4px 10px; font-size:13px; font-weight:700; }
+  .tag.me { background:var(--fg); color:#fff; }
+  .tag.me button { background:none; border:0; color:#fff; margin-left:2px; padding:0 2px; cursor:pointer; font:inherit; }
+  .entry { display:flex; gap:6px; margin-top:12px; }
+  .entry input, .who { flex:1; min-width:0; border:1px solid var(--border); border-radius:14px; padding:10px 12px; background:var(--subtle); }
+  .who { width:100%; margin-bottom:8px; }
+  .ok { border:0; border-radius:14px; background:var(--accent); color:#fff; font-weight:800; padding:0 18px; cursor:pointer; }
+  .ok:disabled { background:var(--faint); }
   .c { display:flex; gap:10px; margin-bottom:14px; }
   .av { width:32px; height:32px; flex:none; border-radius:12px; background:var(--marker); display:grid; place-items:center;
         font-weight:800; font-size:13px; }
@@ -51,7 +50,7 @@
   .c .top b { font-weight:700; } .c .top .del { margin-left:auto; }
   .c p { white-space:pre-wrap; word-break:break-word; }
   .write { display:flex; gap:6px; align-items:flex-end; }
-  .write textarea { flex:1; border:1px solid var(--border); border-radius:14px; padding:10px 12px; resize:none; min-height:44px; max-height:120px; background:var(--subtle); }
+  .write textarea { flex:1; min-width:0; border:1px solid var(--border); border-radius:14px; padding:10px 12px; resize:none; min-height:44px; max-height:120px; background:var(--subtle); }
   .send { width:44px; height:44px; border:0; border-radius:14px; background:var(--accent); color:#fff; font-size:20px; cursor:pointer; }
   .send:disabled { background:var(--faint); }
   .center { text-align:center; padding:60px 10px; }
@@ -65,6 +64,7 @@
 
 <script>
 // 공개용 키만 씁니다 (회원은 member_* 함수로 이 일정 하나만 읽고 씀).
+// 회원 명단은 받지 않고, 투표·댓글을 남긴 사람 이름만 보입니다.
 const URL_ = 'https://frelonbfozmwofvmbzpx.supabase.co';
 const KEY = 'sb_publishable_-2GS62bzPBseS5JB9qOKDA_pJ7oEZ6T';
 const eventId = new URLSearchParams(location.search).get('e') || '';
@@ -74,10 +74,11 @@ const store = {
   get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
-const meKey = 'moimgyeol:me:' + eventId;
+// 이 기기에서 마지막으로 적은 이름 (명단에 있는 정식 이름). 다음 칸을 열면 미리 채워 둡니다.
+const meKey = 'moimgyeol:name';
 const tokKey = 'moimgyeol:tokens';
 
-let data = null, me = store.get(meKey), busy = false, error = '';
+let data = null, me = store.get(meKey), busy = false, error = '', open = null, slotError = '';
 
 async function rpc(fn, params) {
   const r = await fetch(`${URL_}/rest/v1/rpc/${fn}`, {
@@ -86,7 +87,10 @@ async function rpc(fn, params) {
     body: JSON.stringify(params),
   });
   const text = await r.text();
-  if (!r.ok) throw new Error(text);
+  if (!r.ok) {
+    let msg = text; try { msg = JSON.parse(text).message || text; } catch {}
+    throw new Error(msg);
+  }
   return text ? JSON.parse(text) : null;
 }
 
@@ -109,35 +113,39 @@ async function load() {
     data = eventId ? await rpc('member_event', { p_event: eventId }) : null;
     error = '';
   } catch { error = '불러오지 못했어요. 잠시 뒤 다시 열어 주세요.'; }
-  if (data && me && !data.members.some(m => m.id === me)) { me = null; store.set(meKey, null); }
   render();
 }
 
-async function act(job) {
+// 서버가 돌려준 오류를 회원이 알아볼 말로 바꿉니다.
+function why(err) {
+  const m = String(err && err.message || '');
+  if (m.includes('name_not_found')) return '명단에 없는 이름이에요. 총무에게 등록된 이름 그대로 적어 주세요.';
+  if (m.includes('name_ambiguous')) return '같은 이름이 둘 있어요. 총무에게 말해 주세요.';
+  return '저장하지 못했어요. 연결을 확인하고 다시 눌러 주세요.';
+}
+
+async function act(job, slot) {
   if (busy) return;
-  busy = true; error = ''; render();
+  busy = true; error = ''; slotError = ''; render();
   try { await job(); await load(); }
-  catch { error = '저장하지 못했어요. 연결을 확인하고 다시 눌러 주세요.'; }
+  catch (err) { if (slot) slotError = why(err); else error = why(err); }
   busy = false; render();
 }
 
-const VOTES = [
-  ['yes', '참석', '✓', 'var(--success)'],
-  ['maybe', '미정', '?', 'var(--warn)'],
-  ['no', '불참', '✕', 'var(--muted)'],
-];
+const COLOR = { going:'var(--success)', maybe:'var(--warn)', no:'var(--muted)' };
+const same = (a, b) => String(a || '').replace(/\s/g, '') === String(b || '').replace(/\s/g, '');
 
 function render() {
   if (!data) {
     app.innerHTML = `<p class="center muted">${error ? esc(error) : '일정을 찾을 수 없어요. 링크를 다시 확인해 주세요.'}</p>`;
     return;
   }
-  const e = data.event, name = id => (data.members.find(m => m.id === id) || {}).name || '알 수 없음';
-  const mine = (data.rsvps.find(r => r.member_id === me) || {}).response;
-  const n = k => data.rsvps.filter(r => r.response === k).length;
-  const going = data.rsvps.filter(r => r.response === 'yes').map(r => name(r.member_id));
+  const e = data.event, opts = e.options || [];
   const tokens = store.get(tokKey) || {};
   document.title = `${e.title} · ${e.group_name}`;
+  // 다시 그리기 전에 적던 글을 챙겨 둡니다
+  const keep = id => document.getElementById(id)?.value;
+  const draft = keep('body') || '', typed = keep('slotName'), who = keep('who');
 
   let h = `<section class="hero">
     <div class="g">${esc(e.group_name)}</div>
@@ -147,70 +155,77 @@ function render() {
     ${e.fee > 0 ? `<span class="chip">행사비 ${e.fee.toLocaleString('ko-KR')}원</span>` : ''}
   </section>`;
 
-  if (!me) {
-    h += `<h2>누구세요?</h2><div class="card">
-      <b>이름을 골라 주세요</b>
-      <div class="muted small">이 기기에 기억해서 다음부터는 바로 열려요.</div>
-      <div class="names">${data.members.map(m => `<button class="name" data-me="${m.id}">${esc(m.name)}</button>`).join('')}</div>
+  h += `<h2>참석 투표</h2><p class="muted small guide">해당하는 칸에 이름을 적고 확인을 눌러 주세요. 다른 칸에 적으면 그쪽으로 옮겨져요.</p>`;
+  for (const o of opts) {
+    const names = data.rsvps.filter(r => r.response === o.id).map(r => r.name);
+    const isOpen = open === o.id;
+    h += `<div class="card slot">
+      <div class="head"><b style="color:${COLOR[o.group] || 'var(--fg)'}">${esc(o.label)}</b>
+        <span class="muted small">${names.length}명</span>
+        <button class="link open" data-open="${esc(o.id)}">${isOpen ? '닫기' : '이름 적기'}</button></div>
+      ${names.length ? `<div class="tags">${names.map(n => same(n, me)
+        ? `<span class="tag me">${esc(n)}<button data-cancel="${esc(o.id)}" aria-label="내 이름 지우기" ${busy ? 'disabled' : ''}>✕</button></span>`
+        : `<span class="tag">${esc(n)}</span>`).join('')}</div>` : ''}
+      ${isOpen ? `<div class="entry">
+          <input id="slotName" maxlength="20" placeholder="내 이름" autocomplete="name" enterkeyhint="done">
+          <button class="ok" data-confirm="${esc(o.id)}" ${busy ? 'disabled' : ''}>확인</button>
+        </div>${slotError ? `<p class="err">${esc(slotError)}</p>` : ''}` : ''}
     </div>`;
-  } else {
-    h += `<div class="hello"><b>${esc(name(me))}님, 오실 거죠? 👋</b><button class="link" data-reset>내가 아니에요</button></div>
-      <div class="votes">${VOTES.map(([k, label, icon, color]) => {
-        const on = mine === k;
-        return `<button class="vote ${on ? 'on' : ''}" data-vote="${k}" ${busy ? 'disabled' : ''}
-          style="${on ? `background:${color}` : `color:var(--fg)`}">
-          <span class="i" style="color:${on ? '#fff' : color}">${icon}</span>${label}</button>`;
-      }).join('')}</div>`;
   }
-
-  h += `<h2>지금까지</h2><div class="card">
-    <div class="counts">
-      <div><span class="muted small">참석</span><b style="color:var(--success)">${n('yes')}명</b></div>
-      <div><span class="muted small">미정</span><b style="color:var(--warn)">${n('maybe')}명</b></div>
-      <div><span class="muted small">불참</span><b style="color:var(--muted)">${n('no')}명</b></div>
-    </div>
-    ${going.length ? `<div class="tags">${going.map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div>` : ''}
-  </div>`;
 
   h += `<h2>댓글 ${data.comments.length}</h2><div class="card">
     ${data.comments.length ? '' : '<p class="muted small" style="margin-bottom:12px">아직 댓글이 없어요. 첫 댓글을 남겨 보세요!</p>'}
     ${data.comments.map(c => `<div class="c">
-      <div class="av">${esc(name(c.member_id).slice(-2))}</div>
+      <div class="av">${esc(c.name.slice(-2))}</div>
       <div style="flex:1;min-width:0">
-        <div class="top"><b>${esc(name(c.member_id))}</b><span class="muted small">${ago(c.created_at)}</span>
+        <div class="top"><b>${esc(c.name)}</b><span class="muted small">${ago(c.created_at)}</span>
           ${tokens[c.id] ? `<button class="link del" data-del="${c.id}">삭제</button>` : ''}</div>
         <p>${esc(c.body)}</p>
       </div></div>`).join('')}
-    ${me ? `<div class="write">
-        <textarea id="body" rows="1" maxlength="500" placeholder="댓글 남기기"></textarea>
-        <button class="send" data-send ${busy ? 'disabled' : ''} aria-label="보내기">↑</button>
-      </div>` : '<p class="muted small">이름을 고르면 댓글을 달 수 있어요.</p>'}
+    ${me ? `<p class="muted small" style="margin-bottom:6px">${esc(me)} 이름으로 남겨요</p>`
+         : `<input id="who" class="who" maxlength="20" placeholder="내 이름">`}
+    <div class="write">
+      <textarea id="body" rows="1" maxlength="500" placeholder="댓글 남기기"></textarea>
+      <button class="send" data-send ${busy ? 'disabled' : ''} aria-label="보내기">↑</button>
+    </div>
     ${error ? `<p class="err">${esc(error)}</p>` : ''}
   </div>`;
 
-  const draft = document.getElementById('body')?.value || '';
   app.innerHTML = h;
-  const ta = document.getElementById('body');
-  if (ta) ta.value = draft;
+  const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
+  set('body', draft); set('who', who);
+  const slot = document.getElementById('slotName');
+  if (slot) { slot.value = typed != null ? typed : (me || ''); if (typed == null) slot.focus(); }
+}
+
+function confirmSlot(optionId) {
+  const name = (document.getElementById('slotName')?.value || '').trim();
+  if (!name) { slotError = '이름을 적어 주세요.'; render(); return; }
+  act(async () => {
+    me = await rpc('member_vote', { p_event: eventId, p_name: name, p_response: optionId });
+    store.set(meKey, me); open = null;
+  }, true);
 }
 
 app.addEventListener('click', ev => {
   const t = ev.target.closest('button');
-  if (!t) return;
-  if (t.dataset.me) { me = t.dataset.me; store.set(meKey, me); render(); }
-  else if ('reset' in t.dataset) { me = null; store.set(meKey, null); render(); }
-  else if (t.dataset.vote) {
-    const mine = (data.rsvps.find(r => r.member_id === me) || {}).response;
-    const next = mine === t.dataset.vote ? null : t.dataset.vote; // 같은 걸 다시 누르면 취소
-    act(() => rpc('member_vote', { p_event: eventId, p_member: me, p_response: next }));
+  if (!t || busy) return;
+  if (t.dataset.open) {
+    open = open === t.dataset.open ? null : t.dataset.open; slotError = ''; render();
+  }
+  else if (t.dataset.confirm) confirmSlot(t.dataset.confirm);
+  else if (t.dataset.cancel) {
+    act(() => rpc('member_vote', { p_event: eventId, p_name: me, p_response: null }));
   }
   else if ('send' in t.dataset) {
-    const ta = document.getElementById('body');
-    const body = ta.value.trim();
+    const body = document.getElementById('body').value.trim();
+    const name = me || (document.getElementById('who')?.value || '').trim();
     if (!body) return;
+    if (!name) { error = '이름을 적어 주세요.'; render(); return; }
     act(async () => {
-      const r = await rpc('member_comment', { p_event: eventId, p_member: me, p_body: body });
+      const r = await rpc('member_comment', { p_event: eventId, p_name: name, p_body: body });
       const tokens = store.get(tokKey) || {}; tokens[r.id] = r.edit_token; store.set(tokKey, tokens);
+      me = r.name; store.set(meKey, me);
       const cur = document.getElementById('body'); if (cur) cur.value = '';
     });
   }
@@ -220,6 +235,11 @@ app.addEventListener('click', ev => {
       await rpc('member_delete_comment', { p_comment: t.dataset.del, p_token: tokens[t.dataset.del] });
       delete tokens[t.dataset.del]; store.set(tokKey, tokens);
     });
+  }
+});
+app.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && ev.target.id === 'slotName' && !ev.isComposing) {
+    ev.preventDefault(); if (open && !busy) confirmSlot(open);
   }
 });
 
