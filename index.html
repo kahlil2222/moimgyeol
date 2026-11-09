@@ -127,6 +127,7 @@ function why(err) {
   const m = String(err && err.message || '');
   if (m.includes('name_not_found')) return '명단에 없는 이름이에요. 총무에게 등록된 이름 그대로 적어 주세요.';
   if (m.includes('name_ambiguous')) return '같은 이름이 둘 있어요. 총무에게 말해 주세요.';
+  if (m.includes('closed')) return '모임이 끝나서 투표와 댓글이 닫혔어요.';
   return '저장하지 못했어요. 연결을 확인하고 다시 눌러 주세요.';
 }
 
@@ -162,7 +163,16 @@ function render() {
     ${e.fee > 0 ? `<span class="chip">행사비 ${e.fee.toLocaleString('ko-KR')}원</span>` : ''}
   </section>`;
 
-  h += `<h2>참석 투표</h2><p class="muted small guide">해당하는 칸에 이름을 적고 확인을 눌러 주세요. 다른 칸에 적으면 그쪽으로 옮겨져요.</p>`;
+  // 모임 시작 하루 뒤에 링크가 닫힘: 서버는 이름·댓글을 더 돌려주지 않음
+  if (e.closed) {
+    app.innerHTML = h + `<div class="card center" style="padding:28px 16px">
+      <p style="font-weight:800;margin-bottom:6px">지난 모임이에요</p>
+      <p class="muted small">모임이 끝나서 투표와 댓글이 닫혔어요.<br>궁금한 점은 총무에게 물어봐 주세요.</p></div>`;
+    return;
+  }
+
+  h += `<h2>참석 투표</h2><p class="muted small guide">해당하는 칸에 이름을 적고 확인을 눌러 주세요. 다른 칸에 적으면 그쪽으로 옮겨져요.${
+    e.closes_at ? `<br>${when(e.closes_at)}까지 투표하고 댓글을 남길 수 있어요.` : ''}</p>`;
   for (const o of opts) {
     const names = data.rsvps.filter(r => r.response === o.id).map(r => r.name);
     h += `<div class="card slot">
