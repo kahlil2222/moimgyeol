@@ -40,7 +40,6 @@
   .slot { margin-bottom:10px; }
   .slot .head { display:flex; align-items:center; gap:6px; }
   .slot .head b { font-size:16px; font-weight:800; }
-  .slot .head .open { margin-left:auto; color:var(--accent); font-weight:700; font-size:14px; }
   .tags { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
   .tag { background:var(--subtle); border-radius:99px; padding:4px 10px; font-size:13px; font-weight:700; }
   .tag.me { background:var(--fg); color:#fff; }
@@ -85,7 +84,7 @@ const store = {
 const meKey = 'moimgyeol:name';
 const tokKey = 'moimgyeol:tokens';
 
-let data = null, me = store.get(meKey), busy = false, error = '', open = null, slotError = '';
+let data = null, me = store.get(meKey), busy = false, error = '', errSlot = null, slotError = '';
 
 async function rpc(fn, params) {
   const r = await fetch(`${URL_}/rest/v1/rpc/${fn}`, {
@@ -133,9 +132,9 @@ function why(err) {
 
 async function act(job, slot) {
   if (busy) return;
-  busy = true; error = ''; slotError = ''; render();
+  busy = true; error = ''; slotError = ''; errSlot = null; render();
   try { await job(); await load(); }
-  catch (err) { if (slot) slotError = why(err); else error = why(err); }
+  catch (err) { if (slot) { errSlot = slot; slotError = why(err); } else error = why(err); }
   busy = false; render();
 }
 
@@ -152,7 +151,8 @@ function render() {
   document.title = `${e.title} · ${e.group_name}`;
   // 다시 그리기 전에 적던 글을 챙겨 둡니다
   const keep = id => document.getElementById(id)?.value;
-  const draft = keep('body') || '', typed = keep('slotName'), who = keep('who');
+  const draft = keep('body') || '', who = keep('who');
+  const typed = {}; for (const o of opts) typed[o.id] = keep('slot-' + o.id);
 
   let h = `<section class="hero">
     <div class="g">${esc(e.group_name)}</div>
@@ -165,18 +165,16 @@ function render() {
   h += `<h2>참석 투표</h2><p class="muted small guide">해당하는 칸에 이름을 적고 확인을 눌러 주세요. 다른 칸에 적으면 그쪽으로 옮겨져요.</p>`;
   for (const o of opts) {
     const names = data.rsvps.filter(r => r.response === o.id).map(r => r.name);
-    const isOpen = open === o.id;
     h += `<div class="card slot">
       <div class="head"><b style="color:${COLOR[o.group] || 'var(--fg)'}">${esc(o.label)}</b>
-        <span class="muted small">${names.length}명</span>
-        <button class="link open" data-open="${esc(o.id)}">${isOpen ? '닫기' : '이름 적기'}</button></div>
+        <span class="muted small">${names.length}명</span></div>
       ${names.length ? `<div class="tags">${names.map(n => same(n, me)
         ? `<span class="tag me">${esc(n)}<button data-cancel="${esc(o.id)}" aria-label="내 이름 지우기" ${busy ? 'disabled' : ''}>✕</button></span>`
         : `<span class="tag">${esc(n)}</span>`).join('')}</div>` : ''}
-      ${isOpen ? `<div class="entry">
-          <input id="slotName" maxlength="20" placeholder="내 이름" autocomplete="name" enterkeyhint="done">
+      <div class="entry">
+          <input id="slot-${esc(o.id)}" data-slot="${esc(o.id)}" maxlength="20" placeholder="이름 적기" autocomplete="name" enterkeyhint="done">
           <button class="ok" data-confirm="${esc(o.id)}" ${busy ? 'disabled' : ''}>확인</button>
-        </div>${slotError ? `<p class="err">${esc(slotError)}</p>` : ''}` : ''}
+        </div>${errSlot === o.id && slotError ? `<p class="err">${esc(slotError)}</p>` : ''}
     </div>`;
   }
 
@@ -201,26 +199,24 @@ function render() {
   app.innerHTML = h;
   const set = (id, v) => { const el = document.getElementById(id); if (el && v != null) el.value = v; };
   set('body', draft); set('who', who);
-  const slot = document.getElementById('slotName');
-  if (slot) { slot.value = typed != null ? typed : (me || ''); if (typed == null) slot.focus(); }
+  for (const o of opts) set('slot-' + o.id, typed[o.id]);
 }
 
 function confirmSlot(optionId) {
-  const name = (document.getElementById('slotName')?.value || '').trim();
-  if (!name) { slotError = '이름을 적어 주세요.'; render(); return; }
+  const input = document.getElementById('slot-' + optionId);
+  const name = (input?.value || '').trim();
+  if (!name) { errSlot = optionId; slotError = '이름을 적어 주세요.'; render(); return; }
   act(async () => {
     me = await rpc('member_vote', { p_event: eventId, p_name: name, p_response: optionId });
-    store.set(meKey, me); open = null;
-  }, true);
+    store.set(meKey, me);
+    const cur = document.getElementById('slot-' + optionId); if (cur) cur.value = '';
+  }, optionId);
 }
 
 app.addEventListener('click', ev => {
   const t = ev.target.closest('button');
   if (!t || busy) return;
-  if (t.dataset.open) {
-    open = open === t.dataset.open ? null : t.dataset.open; slotError = ''; render();
-  }
-  else if (t.dataset.confirm) confirmSlot(t.dataset.confirm);
+  if (t.dataset.confirm) confirmSlot(t.dataset.confirm);
   else if (t.dataset.cancel) {
     act(() => rpc('member_vote', { p_event: eventId, p_name: me, p_response: null }));
   }
@@ -245,8 +241,8 @@ app.addEventListener('click', ev => {
   }
 });
 app.addEventListener('keydown', ev => {
-  if (ev.key === 'Enter' && ev.target.id === 'slotName' && !ev.isComposing) {
-    ev.preventDefault(); if (open && !busy) confirmSlot(open);
+  if (ev.key === 'Enter' && ev.target.dataset.slot && !ev.isComposing) {
+    ev.preventDefault(); if (!busy) confirmSlot(ev.target.dataset.slot);
   }
 });
 
